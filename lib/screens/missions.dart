@@ -1,9 +1,8 @@
-import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import '../services/api_services.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:permission_handler/permission_handler.dart';
+
 
 
 
@@ -50,21 +49,12 @@ class _MissionScreenState extends State<MissionScreen> {
     }
   }
 
-  Future<bool> requestCameraPermission() async {
-    final status = await Permission.camera.status;
-    if (status.isGranted) {
-      return true;
-    } else {
-      final result = await Permission.camera.request();
-      return result.isGranted;
-    }
-  }
+
 
 
   Future<void> _showSubmitDialog(Map<String, dynamic> mission) async {
     final TextEditingController remarksController = TextEditingController();
-    File? pickedImage;
-    final picker = ImagePicker();
+
 
     await showDialog(
       context: context,
@@ -75,29 +65,6 @@ class _MissionScreenState extends State<MissionScreen> {
             content: SingleChildScrollView(
               child: Column(
                 children: [
-                  pickedImage == null
-                      ? ElevatedButton.icon(
-                    onPressed: () async {
-                      bool granted = await requestCameraPermission();
-                      if (!granted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Camera permission is required')),
-                        );
-                        return;
-                      }
-                      final pickedFile = await ImagePicker().pickImage(source: ImageSource.camera);
-
-                      if (pickedFile != null) {
-                        setStateDialog(() {
-                          pickedImage = File(pickedFile.path);
-                        });
-                      }
-                    },
-                    icon: Icon(Icons.camera_alt),
-                    label: Text('Take Photo'),
-                  )
-                      : Image.file(pickedImage!, height: 150),
-
                   const SizedBox(height: 12),
 
                   TextField(
@@ -119,9 +86,7 @@ class _MissionScreenState extends State<MissionScreen> {
                 child: const Text('Cancel'),
               ),
               ElevatedButton(
-                onPressed: pickedImage == null
-                    ? null
-                    : () async {
+                onPressed: () async {
                   try {
                     // Step 1: Check and request location permission
                     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -189,12 +154,7 @@ class _MissionScreenState extends State<MissionScreen> {
                       builder: (_) => const Center(child: CircularProgressIndicator()),
                     );
 
-                    await ApiService.completeMission(
-                      missionId: mission['id'].toString(),
-                      staffId: widget.staffId.toString(),
-                      remarks: remarksController.text,
-                      photoFile: pickedImage!,
-                    );
+
 
                     Navigator.pop(context); // Close loading dialog
                     fetchMissions(); // Refresh missions
@@ -244,12 +204,6 @@ class _MissionScreenState extends State<MissionScreen> {
           return ListTile(
             title: Text(name),
             subtitle: Text('Lat: $lat, Lng: $lng'),
-            trailing: widget.role == 'staff'
-                ? ElevatedButton(
-              onPressed: () => _showSubmitDialog(mission),
-              child: const Text('Submit'),
-            )
-                : null,
 
           );
         },

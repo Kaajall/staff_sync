@@ -6,6 +6,11 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'missions.dart';
 import '../services/api_services.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
+
 
 
 class StaffScreen extends StatefulWidget {
@@ -198,8 +203,37 @@ class _StaffScreenState extends State<StaffScreen> {
       },
     );
   }
+  Future<File?> _takePictureAndSave() async {
+    try {
+      final pickedFile = await ImagePicker().pickImage(source: ImageSource.camera);
+
+      if (pickedFile == null) return null; // User cancelled
+
+      final tempImage = File(pickedFile.path);
+      final appDir = await getApplicationDocumentsDirectory();
+      final uploadsDir = Directory('${appDir.path}/uploads');
+
+      // Create uploads dir if it doesn't exist
+      if (!await uploadsDir.exists()) {
+        await uploadsDir.create(recursive: true);
+      }
+
+      final fileName = path.basename(pickedFile.path);
+      final savedImage = await tempImage.copy('${uploadsDir.path}/$fileName');
+
+      return savedImage;
+    } catch (e) {
+      print('Error capturing image: $e');
+      return null;
+    }
+  }
+
+
 
   void _openSecondaryDrawer(Map<String, dynamic> location) {
+    final TextEditingController remarksController = TextEditingController();
+    File? capturedPhoto;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -208,71 +242,117 @@ class _StaffScreenState extends State<StaffScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
       ),
       builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-            left: 20,
-            right: 20,
-            top: 30,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                left: 20,
+                right: 20,
+                top: 30,
               ),
-              SizedBox(height: 20),
-              Text(
-                'Remarks for ${location['name']}',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              SizedBox(height: 12),
-              TextField(
-                decoration: InputDecoration(
-                  hintText: 'Enter your remarks...',
-                  contentPadding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                maxLines: 3,
-              ),
-              SizedBox(height: 15),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    // TODO: Add snap logic
-                  },
-                  icon: Icon(Icons.camera_alt_rounded),
-                  label: Text('Take Picture'),
-                  style: ElevatedButton.styleFrom(
-                    padding: EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
-                    textStyle: TextStyle(fontSize: 16),
                   ),
-                ),
+                  SizedBox(height: 20),
+                  Text(
+                    'Remarks for ${location['name']}',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 12),
+                  TextField(
+                    controller: remarksController,
+                    decoration: InputDecoration(
+                      hintText: 'Enter your remarks...',
+                      contentPadding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    maxLines: 3,
+                  ),
+                  SizedBox(height: 15),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final photo = await _takePictureAndSave();
+                      if (photo != null) {
+                        setState(() {
+                          capturedPhoto = photo;
+                        });
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("Photo not captured.")),
+                        );
+                      }
+                    },
+                    icon: Icon(Icons.camera_alt_rounded),
+                    label: Text(capturedPhoto == null ? 'Take Picture' : 'Retake Picture'),
+                    style: ElevatedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      backgroundColor: capturedPhoto == null ? Colors.blue : Colors.green,
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  ElevatedButton(
+                    onPressed: () async {
+                      if (capturedPhoto == null || remarksController.text.trim().isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("Please provide both photo and remarks.")),
+                        );
+                        return;
+                      }
+
+                      Navigator.pop(context); // Close bottom sheet before submitting
+
+                      // Call API
+                      await ApiService.completeMission(
+                        missionId: location['id'].toString(),
+                        staffId: widget.staffId.toString(),
+                        remarks: remarksController.text.trim(),
+                        photoFile: capturedPhoto!,
+                      );
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("Mission marked as complete.")),
+                      );
+
+                      // Optionally refresh missions
+                      _fetchMissions(widget.staffId);
+                    },
+                    child: Text("Submit Mission"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      padding: EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      textStyle: TextStyle(fontSize: 16),
+                    ),
+                  ),
+                  SizedBox(height: 20),
+                ],
               ),
-              SizedBox(height: 20),
-            ],
-          ),
+            );
+          },
         );
       },
     );
   }
+
 
 
   @override

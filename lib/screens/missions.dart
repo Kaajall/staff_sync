@@ -1,0 +1,259 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import '../services/api_services.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+
+
+class MissionScreen extends StatefulWidget {
+  final dynamic staffId;
+  final String role;
+
+  const MissionScreen({required this.staffId, required this.role, Key? key}) : super(key: key);
+
+  @override
+  _MissionScreenState createState() => _MissionScreenState();
+}
+
+class _MissionScreenState extends State<MissionScreen> {
+  List<dynamic> missions = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchMissions();
+  }
+
+  Future<void> fetchMissions() async {
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final data = await ApiService.getMissions(widget.staffId.toString());
+      if (data is List && data.every((e) => e is Map)) {
+        setState(() {
+          missions = data;
+          isLoading = false;
+        });
+      } else {
+        throw Exception("Unexpected data format from API");
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+        missions = [];
+      });
+    }
+  }
+
+  Future<bool> requestCameraPermission() async {
+    final status = await Permission.camera.status;
+    if (status.isGranted) {
+      return true;
+    } else {
+      final result = await Permission.camera.request();
+      return result.isGranted;
+    }
+  }
+
+
+  Future<void> _showSubmitDialog(Map<String, dynamic> mission) async {
+    final TextEditingController remarksController = TextEditingController();
+    File? pickedImage;
+    final picker = ImagePicker();
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setStateDialog) {
+          return AlertDialog(
+            title: Text('Complete Mission: ${mission['name'] ?? ''}'),
+            content: SingleChildScrollView(
+              child: Column(
+                children: [
+                  pickedImage == null
+                      ? ElevatedButton.icon(
+                    onPressed: () async {
+                      bool granted = await requestCameraPermission();
+                      if (!granted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Camera permission is required')),
+                        );
+                        return;
+                      }
+                      final pickedFile = await ImagePicker().pickImage(source: ImageSource.camera);
+
+                      if (pickedFile != null) {
+                        setStateDialog(() {
+                          pickedImage = File(pickedFile.path);
+                        });
+                      }
+                    },
+                    icon: Icon(Icons.camera_alt),
+                    label: Text('Take Photo'),
+                  )
+                      : Image.file(pickedImage!, height: 150),
+
+                  const SizedBox(height: 12),
+
+                  TextField(
+                    controller: remarksController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Remarks',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context); // Cancel
+                },
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: pickedImage == null
+                    ? null
+                    : () async {
+                  try {
+                    // Step 1: Check and request location permission
+                    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+                    if (!serviceEnabled) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Location services are disabled.')),
+                      );
+                      return;
+                    }
+
+                    LocationPermission permission = await Geolocator.checkPermission();
+                    if (permission == LocationPermission.denied) {
+                      permission = await Geolocator.requestPermission();
+                      if (permission == LocationPermission.denied) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Location permissions are denied')),
+                        );
+                        return;
+                      }
+                    }
+
+                    if (permission == LocationPermission.deniedForever) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Location permissions are permanently denied')),
+                      );
+                      return;
+                    }
+
+                    // Step 2: Get current location
+                    Position currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+
+                    // Step 3: Get mission coordinates
+                    final double? missionLat = (mission['latitude'] as num?)?.toDouble();
+                    final double? missionLng = (mission['longitude'] as num?)?.toDouble();
+
+                    if (missionLat == null || missionLng == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Mission location data is invalid.')),
+                      );
+                      return;
+                    }
+
+                    // Step 4: Calculate distance
+                    double distance = Geolocator.distanceBetween(
+                      missionLat,
+                      missionLng,
+                      currentPosition.latitude,
+                      currentPosition.longitude,
+                    );
+
+                    if (distance > 200) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Too far from mission location (Distance: ${distance.toStringAsFixed(1)} m). Must be within 200 meters.'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    // Step 5: Proceed with mission completion
+                    Navigator.pop(context); // Close dialog
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (_) => const Center(child: CircularProgressIndicator()),
+                    );
+
+                    await ApiService.completeMission(
+                      missionId: mission['id'].toString(),
+                      staffId: widget.staffId.toString(),
+                      remarks: remarksController.text,
+                      photoFile: pickedImage!,
+                    );
+
+                    Navigator.pop(context); // Close loading dialog
+                    fetchMissions(); // Refresh missions
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Mission marked as completed')),
+                    );
+                  } catch (e) {
+                    Navigator.pop(context); // Close loading dialog
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: $e')),
+                    );
+                  }
+                },
+                child: const Text('Submit'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Missions')),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : missions.isEmpty
+          ? const Center(child: Text('No missions available'))
+          : ListView.builder(
+        itemCount: missions.length,
+        itemBuilder: (context, index) {
+          final mission = missions[index] as Map<String, dynamic>?;
+
+          if (mission == null) {
+            return const ListTile(title: Text("Invalid mission data"));
+          }
+
+          final name = mission['name']?.toString() ?? 'Unnamed Mission';
+          final latValue = mission['latitude'];
+          final lngValue = mission['longitude'];
+          final lat = latValue is num ? latValue.toStringAsFixed(6) : 'N/A';
+          final lng = lngValue is num ? lngValue.toStringAsFixed(6) : 'N/A';
+
+          return ListTile(
+            title: Text(name),
+            subtitle: Text('Lat: $lat, Lng: $lng'),
+            trailing: widget.role == 'staff'
+                ? ElevatedButton(
+              onPressed: () => _showSubmitDialog(mission),
+              child: const Text('Submit'),
+            )
+                : null,
+
+          );
+        },
+      ),
+    );
+  }
+}

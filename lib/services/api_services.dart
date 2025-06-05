@@ -10,7 +10,7 @@ import 'package:http_parser/http_parser.dart';
 
 
 class ApiService {
-  static const String baseUrl = "http://192.168.202.97:3000"; // Your backend URL
+  static const String baseUrl = "http://192.168.1.17:3000"; // Your backend URL
 
 
   // ✅ Fetch User Data (Requires Token)

@@ -200,14 +200,49 @@ class _MissionScreenState extends State<MissionScreen> {
           final lngValue = mission['longitude'];
           final lat = latValue is num ? latValue.toStringAsFixed(6) : 'N/A';
           final lng = lngValue is num ? lngValue.toStringAsFixed(6) : 'N/A';
+          final status = mission['status'] ?? 'unknown';
+          final remarks = mission['remarks'] ?? '';
+          final imageUrl = mission['image_url'] ?? '';
 
-          return ListTile(
-            title: Text(name),
-            subtitle: Text('Lat: $lat, Lng: $lng'),
-
+          return Card(
+            margin: const EdgeInsets.all(10),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            elevation: 4,
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text('Lat: $lat, Lng: $lng'),
+                  const SizedBox(height: 4),
+                  Text('Status: ${status.toString().toUpperCase()}'),
+                  if (remarks.toString().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('Remarks: $remarks'),
+                    ),
+                  if (imageUrl.toString().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          imageUrl,
+                          height: 100,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           );
         },
       ),
     );
   }
+
 }

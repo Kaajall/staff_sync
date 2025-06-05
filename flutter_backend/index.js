@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
+const app = express();
 const db = require('./db'); // ✅ Import database connection
 const staffRoutes = require('./routes/staff');
 const adminRoutes = require('./routes/admin');
@@ -18,7 +20,7 @@ const PORT = process.env.PORT || 3000;
 // ✅ Apply CORS before defining routes
 app.use(cors());
 app.use(express.json()); // ✅ Ensure JSON parsing is applied once
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
 
 // ✅ Check for missing JWT Secret
@@ -136,7 +138,7 @@ app.get('/test', (req, res) => res.json({ message: "Test endpoint is working!" }
 
 // ✅ Start Server
 app.listen(PORT, () => {
-    console.log(`✅ Server running on http://192.168.230.97:${PORT}`);
+    console.log(`✅ Server running on http://192.168.1.17:${PORT}`);
 });
 // ✅ Handle 404 errors
 app.use((req, res) => {

@@ -26,6 +26,8 @@ class _StaffScreenState extends State<StaffScreen> {
   GoogleMapController? _mapController;
   Position? _currentPosition;
   bool _isMissionDrawerOpen = false;
+  bool isWithinRange = false;
+
 
   List<Map<String, dynamic>> targetLocations = [];
   bool _isLoadingMissions = true;
@@ -34,14 +36,15 @@ class _StaffScreenState extends State<StaffScreen> {
 
 
   Set<Marker> _createTargetMarkers() {
-    return targetLocations.map((loc) {
-      return Marker(
-        markerId: MarkerId(loc['name']),
-        position: LatLng(loc['lat'], loc['lng']),
-        infoWindow: InfoWindow(title: loc['name']),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-      );
-    }).toSet();
+    return targetLocations
+        .where((loc) => loc['status'] != 'completed')
+        .map((loc) => Marker(
+      markerId: MarkerId(loc['name']),
+      position: LatLng(loc['lat'], loc['lng']),
+      infoWindow: InfoWindow(title: loc['name']),
+      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+    ))
+        .toSet();
   }
   Widget _buildBottomIcon(IconData icon, String label, VoidCallback onTap) {
     return GestureDetector(
@@ -75,10 +78,13 @@ class _StaffScreenState extends State<StaffScreen> {
       final missions = await ApiService.getMissions(staffId);
       setState(() {
         targetLocations = missions.map((e) => {
+          'id': e['id'],
           'name': e['name'],
           'lat': e['latitude'],
           'lng': e['longitude'],
+          'status': e['status'], // ✅ Make sure 'status' is in your API response
         }).toList();
+
         _isLoadingMissions = false;
       });
       print("Missions fetched successfully: $targetLocations");
@@ -120,18 +126,22 @@ class _StaffScreenState extends State<StaffScreen> {
 
 
   void _focusOnAllMissions() {
-    if (targetLocations.isEmpty || _mapController == null) return;
+    final pendingLocations = targetLocations.where((m) => m['status'] != 'completed').toList();
+    if (pendingLocations.isEmpty || _mapController == null) return;
+    // Calculate bounds for all pending locations
+    final latitudes = pendingLocations.map((loc) => loc['lat'] as double);
+    final longitudes = pendingLocations.map((loc) => loc['lng'] as double);
+    final southwest = LatLng(
+      latitudes.reduce((a, b) => a < b ? a : b),
+      longitudes.reduce((a, b) => a < b ? a : b),
+    );
 
-    LatLngBounds bounds;
-    final latitudes = targetLocations.map((loc) => loc['lat'] as double);
-    final longitudes = targetLocations.map((loc) => loc['lng'] as double);
+    final northeast = LatLng(
+      latitudes.reduce((a, b) => a > b ? a : b),
+      longitudes.reduce((a, b) => a > b ? a : b),
+    );
 
-    final southwest = LatLng(latitudes.reduce((a, b) => a < b ? a : b),
-        longitudes.reduce((a, b) => a < b ? a : b));
-    final northeast = LatLng(latitudes.reduce((a, b) => a > b ? a : b),
-        longitudes.reduce((a, b) => a > b ? a : b));
-
-    bounds = LatLngBounds(southwest: southwest, northeast: northeast);
+    final bounds = LatLngBounds(southwest: southwest, northeast: northeast);
 
     _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
   }
@@ -159,11 +169,12 @@ class _StaffScreenState extends State<StaffScreen> {
       initialChildSize: 0.5,
       maxChildSize: 0.8,
       builder: (_, controller) {
+        final pendingMissions = targetLocations.where((m) => m['status'] != 'completed').toList();
         return ListView.builder(
           controller: controller,
-          itemCount: targetLocations.length,
+          itemCount: pendingMissions.length,
           itemBuilder: (_, index) {
-            final loc = targetLocations[index];
+            final loc = pendingMissions[index];
             return ListTile(
               leading: CircleAvatar(
                 backgroundColor: Colors.blueAccent.shade100,
@@ -191,7 +202,10 @@ class _StaffScreenState extends State<StaffScreen> {
                     icon: Icon(Icons.chevron_right),
                     onPressed: () {
                       Navigator.pop(context);
-                      _openSecondaryDrawer(loc);
+                      _checkProximity(loc['lat'], loc['lng']).then((_) {
+                        _openSecondaryDrawer(loc);
+                      });
+
                     },
                   ),
                 ],
@@ -228,11 +242,25 @@ class _StaffScreenState extends State<StaffScreen> {
     }
   }
 
+  Future<void> _checkProximity(double targetLat, double targetLng) async {
+    Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+    double distanceInMeters = Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      targetLat,
+      targetLng,
+    );
+
+    setState(() {
+      isWithinRange = distanceInMeters <= 200;
+    });
+  }
 
 
   void _openSecondaryDrawer(Map<String, dynamic> location) {
     final TextEditingController remarksController = TextEditingController();
     File? capturedPhoto;
+    bool isSubmitting = false;
 
     showModalBottomSheet(
       context: context,
@@ -244,6 +272,9 @@ class _StaffScreenState extends State<StaffScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
+            // Helper to check if submit can be enabled
+            bool canSubmit = capturedPhoto != null && remarksController.text.trim().isNotEmpty;
+
             return Padding(
               padding: EdgeInsets.only(
                 bottom: MediaQuery.of(context).viewInsets.bottom,
@@ -251,100 +282,155 @@ class _StaffScreenState extends State<StaffScreen> {
                 right: 20,
                 top: 30,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey[300],
-                        borderRadius: BorderRadius.circular(10),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[300],
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
                     ),
-                  ),
-                  SizedBox(height: 20),
-                  Text(
-                    'Remarks for ${location['name']}',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  SizedBox(height: 12),
-                  TextField(
-                    controller: remarksController,
-                    decoration: InputDecoration(
-                      hintText: 'Enter your remarks...',
-                      contentPadding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                    SizedBox(height: 20),
+                    Text(
+                      'Complete Mission: ${location['name']}',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                     ),
-                    maxLines: 3,
-                  ),
-                  SizedBox(height: 15),
-                  ElevatedButton.icon(
-                    onPressed: () async {
-                      final photo = await _takePictureAndSave();
-                      if (photo != null) {
-                        setState(() {
-                          capturedPhoto = photo;
-                        });
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("Photo not captured.")),
-                        );
+                    SizedBox(height: 12),
+                    Text(
+                      'Add remarks and capture a photo to submit the mission.',
+                      style: TextStyle(color: Colors.grey[700], fontSize: 14),
+                    ),
+                    SizedBox(height: 20),
+                    TextField(
+                      controller: remarksController,
+                      decoration: InputDecoration(
+                        labelText: 'Remarks',
+                        hintText: 'Enter your remarks here...',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      ),
+                      maxLines: 3,
+                      onChanged: (_) => setState(() {}), // To update Submit button enable state
+                    ),
+                    SizedBox(height: 20),
+
+                    // Photo preview or placeholder
+                    GestureDetector(
+                      onTap: isWithinRange
+                          ? () async {
+                        final photo = await _takePictureAndSave();
+                        if (photo != null) {
+                          setState(() {
+                            capturedPhoto = photo;
+                          });
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("Photo not captured.")),
+                          );
+                        }
                       }
-                    },
-                    icon: Icon(Icons.camera_alt_rounded),
-                    label: Text(capturedPhoto == null ? 'Take Picture' : 'Retake Picture'),
-                    style: ElevatedButton.styleFrom(
-                      padding: EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                          : null,
+                      child: Container(
+                        height: 180,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.grey.shade400),
+                          color: Colors.grey.shade100,
+                          boxShadow: capturedPhoto != null
+                              ? [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 10,
+                              offset: Offset(0, 4),
+                            )
+                          ]
+                              : [],
+                        ),
+                        child: capturedPhoto == null
+                            ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.camera_alt_outlined, size: 50, color: Colors.grey),
+                              SizedBox(height: 8),
+                              Text(
+                                isWithinRange
+                                    ? 'Tap to take picture'
+                                    : 'You must be within 200 meters to take a picture',
+                                style: TextStyle(color: Colors.grey[600]),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        )
+                            : ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: Image.file(
+                            capturedPhoto!,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
                       ),
-                      backgroundColor: capturedPhoto == null ? Colors.blue : Colors.green,
                     ),
-                  ),
-                  SizedBox(height: 10),
-                  ElevatedButton(
-                    onPressed: () async {
-                      if (capturedPhoto == null || remarksController.text.trim().isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("Please provide both photo and remarks.")),
-                        );
-                        return;
-                      }
 
-                      Navigator.pop(context); // Close bottom sheet before submitting
+                    SizedBox(height: 30),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: canSubmit && !isSubmitting
+                            ? () async {
+                          setState(() => isSubmitting = true);
 
-                      // Call API
-                      await ApiService.completeMission(
-                        missionId: location['id'].toString(),
-                        staffId: widget.staffId.toString(),
-                        remarks: remarksController.text.trim(),
-                        photoFile: capturedPhoto!,
-                      );
+                          // Call API to complete mission
+                          await ApiService.completeMission(
+                            missionId: location['id'].toString(),
+                            staffId: widget.staffId.toString(),
+                            remarks: remarksController.text.trim(),
+                            photoFile: capturedPhoto!,
+                          );
 
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text("Mission marked as complete.")),
-                      );
+                          setState(() => isSubmitting = false);
 
-                      // Optionally refresh missions
-                      _fetchMissions(widget.staffId);
-                    },
-                    child: Text("Submit Mission"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange,
-                      padding: EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("Mission marked as complete.")),
+                          );
+
+                          Navigator.pop(context); // Close drawer
+
+                          // Refresh missions on main screen
+                          _fetchMissions(widget.staffId);
+                        }
+                            : null,
+                        style: ElevatedButton.styleFrom(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          backgroundColor: canSubmit ? Colors.orange : Colors.grey.shade400,
+                          textStyle: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        child: isSubmitting
+                            ? SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+                        )
+                            : Text('Submit Mission'),
                       ),
-                      textStyle: TextStyle(fontSize: 16),
                     ),
-                  ),
-                  SizedBox(height: 20),
-                ],
+                    SizedBox(height: 20),
+                  ],
+                ),
               ),
             );
           },
@@ -352,6 +438,7 @@ class _StaffScreenState extends State<StaffScreen> {
       },
     );
   }
+
 
 
 

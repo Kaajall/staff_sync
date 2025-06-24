@@ -10,8 +10,9 @@ import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-
-
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'dart:async';
+enum RideStatus { notStarted, started, reached, completed }
 
 class StaffScreen extends StatefulWidget {
   final String staffId;
@@ -27,8 +28,8 @@ class _StaffScreenState extends State<StaffScreen> {
   Position? _currentPosition;
   bool _isMissionDrawerOpen = false;
   bool isWithinRange = false;
-
-
+  RideStatus _rideStatus = RideStatus.notStarted;
+  Map<String, dynamic>? _activeMission;
   List<Map<String, dynamic>> targetLocations = [];
   bool _isLoadingMissions = true;
 
@@ -46,6 +47,9 @@ class _StaffScreenState extends State<StaffScreen> {
     ))
         .toSet();
   }
+  Set<Polyline> _polylines = {};
+  List<LatLng> _polylineCoordinates = [];
+
   Widget _buildBottomIcon(IconData icon, String label, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
@@ -70,6 +74,24 @@ class _StaffScreenState extends State<StaffScreen> {
     _getCurrentLocation();
     print("🧩 StaffScreen loaded with staffId: ${widget.staffId}");
     _fetchMissions(widget.staffId);
+
+    Timer.periodic(Duration(seconds: 10), (timer) async {
+      if (_rideStatus == RideStatus.started && _activeMission != null) {
+        final pos = await Geolocator.getCurrentPosition();
+        final distance = Geolocator.distanceBetween(
+          pos.latitude,
+          pos.longitude,
+          _activeMission!['lat'],
+          _activeMission!['lng'],
+        );
+        if (distance <= 100) {
+          setState(() {
+            _rideStatus = RideStatus.reached;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("You have reached your mission location.")));
+        }
+      }
+    });
   }
 
   Future<void> _fetchMissions(String staffId) async {
@@ -146,6 +168,75 @@ class _StaffScreenState extends State<StaffScreen> {
     _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
   }
 
+  void _startRideFlow(Map<String, dynamic> location) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+      ),
+      builder: (context) {
+        String? selectedVehicle;
+        bool isStarting = false;
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text("Start Ride for ${location['name']}", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  SizedBox(height: 20),
+                  DropdownButtonFormField<String>(
+                    decoration: InputDecoration(
+                      labelText: 'Select Vehicle',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    items: ['Bike', 'Car', 'Scooter'].map((vehicle) => DropdownMenuItem(
+                      value: vehicle,
+                      child: Text(vehicle),
+                    )).toList(),
+                    onChanged: (value) => setModalState(() => selectedVehicle = value),
+                  ),
+                  SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: selectedVehicle != null && !isStarting
+                    ? () async {
+                      setModalState(() => isStarting = true);
+                      final startPos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+                      await ApiService.startRide(
+                        staffId: int.parse(widget.staffId),
+                        missionId: location['id'],
+                        vehicleType: selectedVehicle!,
+                        lat: startPos.latitude,
+                        lng: startPos.longitude,
+                      );
+                      _drawPolyline(startPos.latitude, startPos.longitude, location['lat'], location['lng']);
+
+                      setState(() {
+                        _rideStatus = RideStatus.started;
+                        _activeMission = location;
+                      });
+
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Ride started.")));
+                    }
+                    : null,
+                    child: isStarting ? CircularProgressIndicator(color: Colors.white) : Text("Start Ride"),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+
+
 
 
   void _openMissionDrawer() {
@@ -202,9 +293,7 @@ class _StaffScreenState extends State<StaffScreen> {
                     icon: Icon(Icons.chevron_right),
                     onPressed: () {
                       Navigator.pop(context);
-                      _checkProximity(loc['lat'], loc['lng']).then((_) {
-                        _openSecondaryDrawer(loc);
-                      });
+                      _startRideFlow(loc);
 
                     },
                   ),
@@ -257,10 +346,50 @@ class _StaffScreenState extends State<StaffScreen> {
   }
 
 
+  Future<void> _drawPolyline(double startLat, double startLng, double endLat, double endLng) async {
+    PolylinePoints polylinePoints = PolylinePoints();
+    PolylineRequest request = PolylineRequest(
+
+      origin: PointLatLng(startLat, startLng),
+      destination: PointLatLng(endLat, endLng),
+      mode: TravelMode.driving, // Specify the travel mode
+
+    );
+
+    PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(request: request);
+
+    if (result.points.isNotEmpty) {
+      setState(() {
+        _polylineCoordinates = result.points.map((point) => LatLng(point.latitude, point.longitude)).toList();
+        _polylines.add(
+          Polyline(
+            polylineId: PolylineId("route"),
+            color: Colors.blue,
+            width: 5,
+            points: _polylineCoordinates,
+          ),
+        );
+      });
+    } else {
+      print('No route found: ${result.errorMessage}');
+    }
+  }
+
+
+
+
   void _openSecondaryDrawer(Map<String, dynamic> location) {
     final TextEditingController remarksController = TextEditingController();
     File? capturedPhoto;
     bool isSubmitting = false;
+    bool isRideStarted = false;
+    String? selectedVehicle;
+
+    LatLng? _rideStartLatLng;
+    LatLng? _rideEndLatLng;
+    String? _selectedVehicle;
+    bool _isRideStarted = false;
+
 
     showModalBottomSheet(
       context: context,
@@ -322,6 +451,63 @@ class _StaffScreenState extends State<StaffScreen> {
                       onChanged: (_) => setState(() {}), // To update Submit button enable state
                     ),
                     SizedBox(height: 20),
+                    if (!isRideStarted) ...[
+                      SizedBox(height: 20),
+                      DropdownButtonFormField<String>(
+                        decoration: InputDecoration(
+                          labelText: 'Select Vehicle',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        ),
+                        value: selectedVehicle,
+                        items: ['Bike', 'Car', 'Scooter']
+                            .map((vehicle) => DropdownMenuItem(
+                          value: vehicle,
+                          child: Text(vehicle),
+                        ))
+                            .toList(),
+                        onChanged: (value) => setState(() => selectedVehicle = value),
+                      ),
+                      SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: selectedVehicle != null
+                              ? () async {
+                            final startPosition = await Geolocator.getCurrentPosition(
+                              desiredAccuracy: LocationAccuracy.high,
+                            );
+                            await ApiService.startRide(
+                              staffId: int.parse(widget.staffId),
+                              missionId: location['id'],
+                              vehicleType: selectedVehicle!,
+                              lat: startPosition.latitude,
+                              lng: startPosition.longitude,
+                            );
+                            setState(() {
+                              isRideStarted = true;
+                              _rideStartLatLng = LatLng(startPosition.latitude, startPosition.longitude);
+                              _drawPolyline(startPosition.latitude, startPosition.longitude, location['lat'], location['lng']);
+
+                            });
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text("Ride started. Showing route...")),
+                            );
+
+                            // TODO: Draw polyline in next step
+                          }
+                              : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: selectedVehicle != null ? Colors.green : Colors.grey.shade400,
+                            padding: EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                          child: Text("Start Ride"),
+                        ),
+                      ),
+                    ],
+
 
                     // Photo preview or placeholder
                     GestureDetector(
@@ -458,6 +644,7 @@ class _StaffScreenState extends State<StaffScreen> {
             myLocationButtonEnabled: true,
             onMapCreated: (controller) => _mapController = controller,
             markers: _createTargetMarkers(),
+            polylines: _polylines,
           ),
 
           // bottom bar
@@ -499,6 +686,21 @@ class _StaffScreenState extends State<StaffScreen> {
               ),
             ),
           ),
+          if (_rideStatus == RideStatus.reached)
+          Positioned(
+            bottom: 90,
+            right: 20,
+            child: FloatingActionButton.extended(
+              onPressed: () {
+                setState(() => _rideStatus = RideStatus.completed);
+                _openSecondaryDrawer(_activeMission!);
+              },
+              label: Text("End Ride"),
+              icon: Icon(Icons.flag),
+              backgroundColor: Colors.orange,
+            ),
+          ),
+
         ],
       ),
     );

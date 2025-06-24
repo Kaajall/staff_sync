@@ -4,18 +4,18 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
-const app = express();
 const db = require('./db'); // ✅ Import database connection
 const staffRoutes = require('./routes/staff');
 const adminRoutes = require('./routes/admin');
 const authRoutes = require('./routes/auth');
 const missionsRouter = require('./routes/missions');
-
+const ridesRouter = require('./routes/rides');
 
 
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 
 // ✅ Apply CORS before defining routes
 app.use(cors());
@@ -37,6 +37,7 @@ app.use('/auth', authRoutes);
 app.use('/staff', staffRoutes);
 app.use('/admin', adminRoutes);
 app.use('/missions', missionsRouter);
+app.use('/api/rides', ridesRouter);
 console.log("✅ Mounted missions route at /missions");
 
 

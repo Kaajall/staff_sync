@@ -10,7 +10,7 @@ import 'package:http_parser/http_parser.dart';
 
 
 class ApiService {
-  static const String baseUrl = "http://192.168.1.17:3000"; // Your backend URL
+  static const String baseUrl = "http://192.168.1.6:3000"; // Your backend URL
 
 
   // ✅ Fetch User Data (Requires Token)
@@ -285,6 +285,50 @@ class ApiService {
       throw Exception('Failed to complete mission, status code: ${response.statusCode}');
     }
   }
+
+  static Future<int> startRide({
+    required int staffId,
+    required int missionId,
+    required String vehicleType,
+    required double lat,
+    required double lng,
+  }) async {
+    final url = Uri.parse('$baseUrl/api/rides/start');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'staff_id': staffId,
+        'mission_id': missionId,
+        'vehicle_type': vehicleType,
+        'start_lat': lat,
+        'start_lng': lng,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body)['ride_id'];
+    } else {
+      throw Exception('Failed to start ride');
+    }
+  }
+
+
+  static Future<void> endRide(int rideId, double endLat, double endLng) async {
+    final url = Uri.parse('$baseUrl/api/rides/$rideId/end');
+    await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'end_lat': endLat,
+        'end_lng': endLng,
+        // Don't send end_time manually if the backend handles it as current timestamp
+      }),
+    );
+  }
+
+
+
 
 }
 
